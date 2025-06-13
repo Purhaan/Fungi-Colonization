@@ -4,7 +4,6 @@ from PIL import Image
 from typing import Dict, List, Tuple, Any
 import json
 from scipy import ndimage
-from skimage import measure, morphology
 
 class ColonizationQuantifier:
     """Quantifies mycorrhizal colonization using various methods."""
@@ -50,9 +49,6 @@ class ColonizationQuantifier:
         """Quantify using gridline intersection method."""
         h, w = image.shape[:2]
         
-        # Create grid
-        grid_image = self._create_grid_overlay(image)
-        
         # Detect colonized regions
         colonized_mask = self._detect_colonized_regions(image, prediction)
         
@@ -65,7 +61,7 @@ class ColonizationQuantifier:
             for y in range(0, h):
                 if self._is_root_tissue(image, x, y):
                     total_intersections += 1
-                    if colonized_mask[y, x] > 0:
+                    if x < colonized_mask.shape[1] and y < colonized_mask.shape[0] and colonized_mask[y, x] > 0:
                         colonized_intersections += 1
         
         # Horizontal lines
@@ -73,7 +69,7 @@ class ColonizationQuantifier:
             for x in range(0, w):
                 if self._is_root_tissue(image, x, y):
                     total_intersections += 1
-                    if colonized_mask[y, x] > 0:
+                    if x < colonized_mask.shape[1] and y < colonized_mask.shape[0] and colonized_mask[y, x] > 0:
                         colonized_intersections += 1
         
         percentage = (colonized_intersections / total_intersections * 100) if total_intersections > 0 else 0
@@ -119,8 +115,16 @@ class ColonizationQuantifier:
         # Analyze intensity distribution in root regions
         root_intensities = gray[root_mask > 0]
         
+        if len(root_intensities) == 0:
+            return {
+                'percentage': 0,
+                'total_root_pixels': 0,
+                'colonized_pixels': 0,
+                'intensity_threshold': 0,
+                'method': 'intensity_analysis'
+            }
+        
         # Define thresholds for colonized regions (typically darker)
-        # This is simplified - in practice, you'd train on labeled data
         threshold = np.percentile(root_intensities, 30)  # Bottom 30% intensity
         
         colonized_pixels = np.sum((gray < threshold) & (root_mask > 0))
@@ -135,21 +139,6 @@ class ColonizationQuantifier:
             'intensity_threshold': threshold,
             'method': 'intensity_analysis'
         }
-    
-    def _create_grid_overlay(self, image: np.ndarray) -> np.ndarray:
-        """Create grid overlay for visualization."""
-        h, w = image.shape[:2]
-        overlay = image.copy()
-        
-        # Draw vertical lines
-        for x in range(0, w, self.grid_size):
-            cv2.line(overlay, (x, 0), (x, h), (255, 255, 255), 1)
-        
-        # Draw horizontal lines
-        for y in range(0, h, self.grid_size):
-            cv2.line(overlay, (0, y), (w, y), (255, 255, 255), 1)
-        
-        return overlay
     
     def _segment_root_tissue(self, image: np.ndarray) -> np.ndarray:
         """Segment root tissue from background."""
@@ -172,9 +161,6 @@ class ColonizationQuantifier:
     def _detect_colonized_regions(self, image: np.ndarray, 
                                 prediction: Dict[str, Any]) -> np.ndarray:
         """Detect colonized regions based on prediction and image analysis."""
-        # This is a simplified version - in practice, you'd use the trained model
-        # to generate pixel-level predictions
-        
         # Convert to HSV for better color detection
         hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
         
@@ -225,24 +211,3 @@ class ColonizationQuantifier:
         # Higher agreement (lower CV) = higher confidence
         confidence = max(0.0, 1.0 - cv)
         return confidence
-    
-    def generate_quantification_report(self, results: Dict[str, Any], 
-                                     image_path: str) -> Dict[str, Any]:
-        """Generate comprehensive quantification report."""
-        report = {
-            'image_path': image_path,
-            'final_colonization_percentage': results['colonization_percentage'],
-            'consensus_confidence': results['consensus_confidence'],
-            'method_breakdown': {
-                'gridline_intersection': results['grid_method']['percentage'],
-                'area_percentage': results['area_method']['percentage'],
-                'intensity_analysis': results['intensity_method']['percentage']
-            },
-            'quality_metrics': {
-                'method_agreement': results['consensus_confidence'],
-                'recommended_confidence': 'High' if results['consensus_confidence'] > 0.8 else 
-                                        'Medium' if results['consensus_confidence'] > 0.6 else 'Low'
-            }
-        }
-        
-        return report
