@@ -9,7 +9,6 @@ from PIL import Image
 from typing import List, Dict, Tuple, Any
 import matplotlib.pyplot as plt
 from sklearn.metrics import classification_report, confusion_matrix
-import seaborn as sns
 
 from .model import MycorrhizalCNN
 from .image_processor import ImageProcessor
