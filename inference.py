@@ -84,9 +84,6 @@ class ModelInference:
         image = cv2.imread(image_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
-        # Simple feature detection based on color and texture
-        # This is a simplified version - in practice, you'd want more sophisticated methods
-        
         # Convert to HSV for better color detection
         hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
         
