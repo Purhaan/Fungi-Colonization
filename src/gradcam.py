@@ -6,6 +6,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from typing import Tuple, Optional
+from scipy import ndimage  # ← ADD THIS LINE
 
 from .model import MycorrhizalCNN
 from .image_processor import ImageProcessor
