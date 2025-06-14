@@ -6,7 +6,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from typing import Tuple, Optional
-from scipy import ndimage  # ← ADD THIS LINE
+from scipy import ndimage
 
 from .model import MycorrhizalCNN
 from .image_processor import ImageProcessor
@@ -42,7 +42,7 @@ class GradCAMVisualizer:
         elif hasattr(self.model.backbone, 'features'):  # EfficientNet
             self.model.backbone.features.register_backward_hook(backward_hook)
     
-    def generate_gradcam(self, image_path: str, target_class: Optional[int] = None) -> np.ndarray:
+    def generate_gradcam(self, image_path: str, target_class: Optional[int] = None, return_raw: bool = False) -> np.ndarray:
         """Generate Grad-CAM heatmap for an image."""
         # Preprocess image
         input_tensor = self.image_processor.preprocess_image(image_path)
@@ -70,6 +70,10 @@ class GradCAMVisualizer:
         # Resize to original image size
         original_image = Image.open(image_path).convert('RGB')
         gradcam_resized = cv2.resize(gradcam, original_image.size)
+        
+        # Return raw gradcam if requested (for attention analysis)
+        if return_raw:
+            return gradcam_resized
         
         # Create visualization
         visualization = self._create_visualization(original_image, gradcam_resized)
