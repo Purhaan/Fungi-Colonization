@@ -248,3 +248,155 @@ class ModelTrainer:
             'confusion_matrix': cm,
             'class_names': class_names
         }
+# ADD this class to the END of src/trainer.py:
+
+class ProgressiveTrainer(ModelTrainer):
+    """Progressive training with transfer learning for better results"""
+    
+    def __init__(self, model_type: str = "ResNet18", learning_rate: float = 0.001,
+                 batch_size: int = 16, use_gpu: bool = True):
+        super().__init__(model_type, learning_rate, batch_size, use_gpu)
+        
+        # Use improved model with transfer learning
+        self.model = MycorrhizalCNN(
+            model_type=model_type, 
+            num_classes=5, 
+            pretrained=True,
+            freeze_backbone=True  # Start with frozen backbone
+        )
+        self.model.to(self.device)
+        
+        # Progressive learning schedule
+        self.training_phases = [
+            {'name': 'Phase 1: Head Only', 'epochs': 10, 'lr': 1e-3, 'freeze': True},
+            {'name': 'Phase 2: Fine-tune Last Layers', 'epochs': 15, 'lr': 1e-4, 'freeze': False},
+            {'name': 'Phase 3: Full Fine-tune', 'epochs': 10, 'lr': 1e-5, 'freeze': False}
+        ]
+        
+    def progressive_train(self, image_dir: str, annotation_dir: str):
+        """Train progressively with different learning rates and frozen layers"""
+        
+        # Prepare data once
+        self.prepare_data(image_dir, annotation_dir)
+        
+        all_metrics = {'epoch': [], 'train_loss': [], 'val_loss': [], 
+                      'train_accuracy': [], 'val_accuracy': [], 'phase': []}
+        
+        total_epochs = 0
+        
+        for phase_idx, phase in enumerate(self.training_phases):
+            st.subheader(f"🎯 {phase['name']}")
+            st.write(f"Epochs: {phase['epochs']}, Learning Rate: {phase['lr']}")
+            
+            # Adjust model for this phase
+            if phase_idx == 1:  # Phase 2: unfreeze last layers
+                self.model.unfreeze_backbone(layers_to_unfreeze=1)
+                st.info("🔓 Unfroze last backbone layer")
+            elif phase_idx == 2:  # Phase 3: unfreeze all
+                self.model.unfreeze_backbone(layers_to_unfreeze=4)
+                st.info("🔓 Unfroze all backbone layers")
+            
+            # Update optimizer for new learning rate
+            self.optimizer = torch.optim.Adam(
+                filter(lambda p: p.requires_grad, self.model.parameters()), 
+                lr=phase['lr']
+            )
+            self.scheduler = torch.optim.lr_scheduler.StepLR(
+                self.optimizer, step_size=phase['epochs']//2, gamma=0.5
+            )
+            
+            # Train for this phase
+            phase_progress = st.progress(0)
+            for epoch in range(phase['epochs']):
+                loss = self.train_epoch()
+                
+                # Update progress
+                phase_progress.progress((epoch + 1) / phase['epochs'])
+                
+                # Store metrics
+                all_metrics['epoch'].append(total_epochs + epoch + 1)
+                all_metrics['train_loss'].append(self.train_losses[-1])
+                all_metrics['val_loss'].append(self.val_losses[-1])
+                all_metrics['train_accuracy'].append(self.train_accuracies[-1])
+                all_metrics['val_accuracy'].append(self.val_accuracies[-1])
+                all_metrics['phase'].append(phase['name'])
+                
+                if epoch % 5 == 0:
+                    st.write(f"  Epoch {epoch+1}/{phase['epochs']}: Loss = {loss:.4f}, "
+                           f"Val Acc = {self.val_accuracies[-1]:.1f}%")
+            
+            total_epochs += phase['epochs']
+            st.success(f"✅ {phase['name']} complete!")
+        
+        # Plot progressive training results
+        self.plot_progressive_results(all_metrics)
+        
+        return self.model
+    
+    def plot_progressive_results(self, metrics):
+        """Plot results across all training phases"""
+        import pandas as pd
+        import plotly.express as px
+        import plotly.graph_objects as go
+        
+        df = pd.DataFrame(metrics)
+        
+        # Create subplot with phase annotations
+        fig = go.Figure()
+        
+        # Add training and validation loss
+        fig.add_trace(go.Scatter(x=df['epoch'], y=df['train_loss'], 
+                               name='Training Loss', line=dict(color='blue')))
+        fig.add_trace(go.Scatter(x=df['epoch'], y=df['val_loss'], 
+                               name='Validation Loss', line=dict(color='red')))
+        
+        # Add phase boundaries
+        phase_changes = [0]
+        current_phase = df['phase'].iloc[0]
+        for i, phase in enumerate(df['phase']):
+            if phase != current_phase:
+                phase_changes.append(i)
+                current_phase = phase
+        phase_changes.append(len(df))
+        
+        for i, change_point in enumerate(phase_changes[1:]):
+            fig.add_vline(x=df['epoch'].iloc[change_point-1], 
+                         line_dash="dash", line_color="gray",
+                         annotation_text=f"Phase {i+2}")
+        
+        fig.update_layout(title="Progressive Training Results",
+                         xaxis_title="Epoch", yaxis_title="Loss")
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Accuracy plot
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(x=df['epoch'], y=df['train_accuracy'], 
+                                name='Training Accuracy', line=dict(color='green')))
+        fig2.add_trace(go.Scatter(x=df['epoch'], y=df['val_accuracy'], 
+                                name='Validation Accuracy', line=dict(color='orange')))
+        
+        for i, change_point in enumerate(phase_changes[1:]):
+            fig2.add_vline(x=df['epoch'].iloc[change_point-1], 
+                          line_dash="dash", line_color="gray")
+        
+        fig2.update_layout(title="Progressive Training Accuracy",
+                          xaxis_title="Epoch", yaxis_title="Accuracy (%)")
+        st.plotly_chart(fig2, use_container_width=True)
+
+# MODIFY the train_model_page() function in app.py to include progressive training option:
+# ADD this after the existing training button:
+
+if st.button("🚀 Progressive Training (Better Results)", type="primary"):
+    # Use progressive trainer instead
+    trainer = ProgressiveTrainer(
+        model_type=model_type,
+        learning_rate=learning_rate,
+        batch_size=batch_size,
+        use_gpu=use_gpu
+    )
+    
+    # Run progressive training
+    model = trainer.progressive_train("data/raw", "data/annotations")
+    
+    # Save model same as before
+    # ... (rest of saving code remains the same)
