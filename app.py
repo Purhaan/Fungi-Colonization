@@ -275,6 +275,119 @@ def upload_and_annotate_page():
                         st.write("---")
         else:
             st.info("No annotations saved yet")
+            # ADD THIS FUNCTION to app.py (after upload_and_annotate_page function)
+
+def smart_image_analysis(image_path):
+    """Automatically analyze image quality and suggest colonization regions"""
+    try:
+        image = cv2.imread(image_path)
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # 1. Image quality assessment
+        gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+        
+        # Check blur (Laplacian variance)
+        blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+        
+        # Check contrast
+        contrast_score = gray.std()
+        
+        # Check brightness
+        brightness_score = gray.mean()
+        
+        # 2. Automatic region detection
+        hsv = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2HSV)
+        
+        # Detect dark regions (potential colonization)
+        dark_mask = cv2.inRange(hsv, np.array([0, 0, 0]), np.array([180, 255, 80]))
+        dark_percentage = (np.sum(dark_mask > 0) / dark_mask.size) * 100
+        
+        # Detect medium-dark regions (potential structures)
+        medium_mask = cv2.inRange(hsv, np.array([0, 0, 80]), np.array([180, 255, 150]))
+        medium_percentage = (np.sum(medium_mask > 0) / medium_mask.size) * 100
+        
+        # Suggested colonization level based on automatic analysis
+        if dark_percentage > 15:
+            suggested_level = "Heavily colonized"
+            suggested_percentage = min(80, dark_percentage * 4)
+        elif dark_percentage > 8:
+            suggested_level = "Moderately colonized" 
+            suggested_percentage = min(60, dark_percentage * 5)
+        elif dark_percentage > 3:
+            suggested_level = "Lightly colonized"
+            suggested_percentage = min(30, dark_percentage * 8)
+        else:
+            suggested_level = "Not colonized"
+            suggested_percentage = max(5, dark_percentage * 2)
+        
+        return {
+            'quality': {
+                'blur_score': blur_score,
+                'contrast_score': contrast_score, 
+                'brightness_score': brightness_score,
+                'quality_rating': 'Good' if blur_score > 100 and contrast_score > 40 else 'Poor'
+            },
+            'suggestions': {
+                'level': suggested_level,
+                'percentage': int(suggested_percentage),
+                'dark_regions': dark_percentage,
+                'confidence': min(0.9, dark_percentage / 20)
+            },
+            'detected_regions': {
+                'dark_mask': dark_mask,
+                'medium_mask': medium_mask
+            }
+        }
+    except Exception as e:
+        return None
+
+# REPLACE the image display section in upload_and_annotate_page() with this:
+
+if selected_image:
+    image_path = os.path.join("data/raw", selected_image)
+    
+    try:
+        image = Image.open(image_path)
+        
+        # Display image with better sizing
+        st.image(image, caption=selected_image, use_column_width=True)
+        
+        # ADD SMART ANALYSIS
+        if st.button("🤖 Smart Analysis", help="AI suggests colonization level"):
+            with st.spinner("Analyzing image..."):
+                analysis = smart_image_analysis(image_path)
+                
+                if analysis:
+                    st.success("✅ Smart analysis complete!")
+                    
+                    # Quality assessment
+                    quality = analysis['quality']
+                    if quality['quality_rating'] == 'Good':
+                        st.success(f"📸 Image Quality: {quality['quality_rating']}")
+                    else:
+                        st.warning(f"📸 Image Quality: {quality['quality_rating']} - Consider retaking")
+                    
+                    # AI suggestions
+                    suggestions = analysis['suggestions']
+                    st.info(f"🎯 **AI Suggestion:** {suggestions['level']} ({suggestions['percentage']}%)")
+                    st.info(f"🎯 **Confidence:** {suggestions['confidence']:.1%}")
+                    
+                    # Show detected regions
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        dark_overlay = np.array(image).copy()
+                        dark_overlay[analysis['detected_regions']['dark_mask'] > 0] = [255, 0, 0]
+                        blended = cv2.addWeighted(np.array(image), 0.7, dark_overlay, 0.3, 0)
+                        st.image(blended, caption="🔴 Detected Dark Regions", use_column_width=True)
+                    
+                    with col_b:
+                        st.metric("Dark Regions", f"{suggestions['dark_regions']:.1f}%")
+                        st.metric("Suggested Level", suggestions['level'])
+                        st.metric("Suggested %", f"{suggestions['percentage']}%")
+                else:
+                    st.error("❌ Analysis failed")
+        
+        # REST OF EXISTING ANNOTATION CODE CONTINUES HERE...
 def train_model_page():
     st.header("🤖 Train Deep Learning Model")
     
