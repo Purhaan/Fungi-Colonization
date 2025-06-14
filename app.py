@@ -904,35 +904,40 @@ def explainability_page():
                     model_path = os.path.join("models", selected_model)
                     gradcam_viz = GradCAMVisualizer(model_path)
                     
-                    # Generate Grad-CAM
+                    # Generate Grad-CAM visualization
                     with st.spinner("🔄 Generating AI explanation..."):
                         gradcam_image = gradcam_viz.generate_gradcam(st.session_state.current_temp_path)
+                        # Get raw gradcam for attention analysis
+                        raw_gradcam = gradcam_viz.generate_gradcam(st.session_state.current_temp_path, return_raw=True)
                     
                     # Display Grad-CAM
                     st.image(gradcam_image, caption="Grad-CAM: What AI Sees", use_column_width=True)
                     
                     st.success("✅ Grad-CAM visualization generated!")
                     
-                    # Attention analysis
-                    attention_analysis = gradcam_viz.analyze_attention_regions(
-                        st.session_state.current_temp_path, 
-                        gradcam_image
-                    )
-                    
-                    st.subheader("📊 Attention Analysis")
-                    st.write(f"**High Attention Regions:** {attention_analysis['num_attention_regions']}")
-                    st.write(f"**Total Attention Area:** {attention_analysis['attention_percentage']:.1f}%")
-                    
-                    if attention_analysis['top_regions']:
-                        st.write("**Top Attention Regions:**")
-                        for i, region in enumerate(attention_analysis['top_regions'][:3]):
-                            st.write(f"Region {i+1}: Center({region['center'][0]}, {region['center'][1]}), "
-                                   f"Attention: {region['avg_attention']:.3f}")
+                    # Attention analysis using raw gradcam
+                    try:
+                        attention_analysis = gradcam_viz.analyze_attention_regions(
+                            st.session_state.current_temp_path, 
+                            raw_gradcam  # Use raw gradcam, not the visualization
+                        )
+                        
+                        st.subheader("📊 Attention Analysis")
+                        st.write(f"**High Attention Regions:** {attention_analysis['num_attention_regions']}")
+                        st.write(f"**Total Attention Area:** {attention_analysis['attention_percentage']:.1f}%")
+                        
+                        if attention_analysis['top_regions']:
+                            st.write("**Top Attention Regions:**")
+                            for i, region in enumerate(attention_analysis['top_regions'][:3]):
+                                st.write(f"Region {i+1}: Center({region['center'][0]}, {region['center'][1]}), "
+                                       f"Attention: {region['avg_attention']:.3f}")
+                    except Exception as e:
+                        st.warning(f"⚠️ Attention analysis failed: {e}")
                     
                     # Clean up
                     if os.path.exists(st.session_state.current_temp_path):
                         os.remove(st.session_state.current_temp_path)
-                    
+                        
                 except Exception as e:
                     st.error(f"❌ Grad-CAM generation failed: {str(e)}")
                     st.info("💡 This might be due to model compatibility issues")
@@ -963,16 +968,26 @@ def explainability_page():
                         
                         target_idx = None if target_class == "Predicted Class" else class_mapping.get(target_class)
                         
-                        gradcam_image = gradcam_viz.generate_gradcam(
-                            st.session_state.current_temp_path, 
-                            target_class=target_idx
-                        )
+                        with st.spinner(f"🔄 Generating Grad-CAM for {target_class}..."):
+                            gradcam_image = gradcam_viz.generate_gradcam(
+                                st.session_state.current_temp_path, 
+                                target_class=target_idx
+                            )
                         
                         st.image(gradcam_image, caption=f"Grad-CAM for: {target_class}", 
                                use_column_width=True)
                         
                     except Exception as e:
                         st.error(f"❌ Class-specific Grad-CAM failed: {e}")
+        
+        # Additional information
+        if uploaded_file:
+            st.markdown("---")
+            st.markdown("**💡 Understanding Grad-CAM:**")
+            st.markdown("- **Red/Yellow areas**: High attention regions where the AI focuses")
+            st.markdown("- **Blue areas**: Low attention regions")
+            st.markdown("- **Attention analysis**: Shows which parts of the image influenced the AI's decision")
+            st.markdown("- **Class-specific**: See what the AI would focus on for different colonization levels")
 
 def generate_summary_report(df):
     """Generate a text summary report"""
