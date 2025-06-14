@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import time
 import pandas as pd
 import numpy as np
 import torch
@@ -80,78 +81,200 @@ def upload_and_annotate_page():
     
     with col1:
         st.subheader("Upload Microscope Images")
+        
+        # Optimized file uploader with better performance
         uploaded_files = st.file_uploader(
             "Choose microscope images of plant roots",
             accept_multiple_files=True,
-            type=['png', 'jpg', 'jpeg', 'tiff', 'tif']
+            type=['png', 'jpg', 'jpeg', 'tiff', 'tif'],
+            help="Tip: Upload smaller images (< 5MB) for faster processing"
         )
         
         if uploaded_files:
-            for uploaded_file in uploaded_files:
-                # Save uploaded file
-                file_path = os.path.join("data/raw", uploaded_file.name)
-                with open(file_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-                st.success(f"✅ Uploaded: {uploaded_file.name}")
+            # Add progress bar for uploads
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for i, uploaded_file in enumerate(uploaded_files):
+                status_text.text(f"Processing {uploaded_file.name}...")
+                
+                # Optimize image size for faster processing
+                try:
+                    image = Image.open(uploaded_file)
+                    
+                    # Resize large images to max 1024px while maintaining aspect ratio
+                    max_size = (1024, 1024)
+                    if image.size[0] > max_size[0] or image.size[1] > max_size[1]:
+                        image.thumbnail(max_size, Image.Resampling.LANCZOS)
+                        st.info(f"📏 Resized {uploaded_file.name} for optimal performance")
+                    
+                    # Save optimized image
+                    file_path = os.path.join("data/raw", uploaded_file.name)
+                    
+                    # Convert to RGB if necessary
+                    if image.mode in ('RGBA', 'LA', 'P'):
+                        rgb_image = Image.new('RGB', image.size, (255, 255, 255))
+                        if image.mode == 'P':
+                            image = image.convert('RGBA')
+                        rgb_image.paste(image, mask=image.split()[-1] if image.mode in ('RGBA', 'LA') else None)
+                        image = rgb_image
+                    
+                    # Save with optimization
+                    image.save(file_path, format='JPEG', quality=85, optimize=True)
+                    
+                    st.success(f"✅ Uploaded: {uploaded_file.name}")
+                    
+                except Exception as e:
+                    st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
+                
+                # Update progress
+                progress_bar.progress((i + 1) / len(uploaded_files))
+            
+            status_text.text("✅ All uploads complete!")
+            time.sleep(1)
+            status_text.empty()
+            progress_bar.empty()
     
     with col2:
         st.subheader("Manual Annotation")
         
-        # List available images
-        image_files = [f for f in os.listdir("data/raw") 
-                      if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.tif'))] if os.path.exists("data/raw") else []
+        # List available images with refresh button
+        col2a, col2b = st.columns([3, 1])
+        with col2b:
+            if st.button("🔄 Refresh"):
+                st.rerun()
+        
+        image_files = []
+        if os.path.exists("data/raw"):
+            image_files = [f for f in os.listdir("data/raw") 
+                          if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.tif'))]
         
         if image_files:
             selected_image = st.selectbox("Select image to annotate:", image_files)
             
             if selected_image:
                 image_path = os.path.join("data/raw", selected_image)
-                image = Image.open(image_path)
                 
-                # Display image
-                st.image(image, caption=selected_image, use_column_width=True)
-                
-                # Annotation interface
-                st.markdown("**Annotation Guidelines:**")
-                st.markdown("- Green regions: Colonized areas (arbuscules, vesicles, hyphae)")
-                st.markdown("- Red regions: Non-colonized areas")
-                
-                # Simple annotation using selectbox regions
-                annotation_type = st.selectbox(
-                    "Annotation type for this image:",
-                    ["Not annotated", "Heavily colonized", "Moderately colonized", "Lightly colonized", "Not colonized"]
-                )
-                
-                colonization_percentage = st.slider(
-                    "Estimated colonization percentage:",
-                    0, 100, 50 if annotation_type != "Not annotated" else 0
-                )
-                
-                # Feature detection
-                detected_features = st.multiselect(
-                    "Manually detected features:",
-                    ["Arbuscules", "Vesicles", "Hyphae", "Spores", "Entry points"]
-                )
-                
-                if st.button("Save Annotation"):
-                    annotation_data = {
-                        "image": selected_image,
-                        "annotation_type": annotation_type,
-                        "colonization_percentage": colonization_percentage,
-                        "detected_features": detected_features,
-                        "timestamp": datetime.now().isoformat()
-                    }
+                try:
+                    image = Image.open(image_path)
                     
-                    # Save annotation
+                    # Display image with better sizing
+                    st.image(image, caption=selected_image, use_column_width=True)
+                    
+                    # Check if annotation already exists
                     annotation_file = os.path.join("data/annotations", f"{selected_image}_annotation.json")
-                    with open(annotation_file, 'w') as f:
-                        json.dump(annotation_data, f, indent=2)
+                    existing_annotation = None
                     
-                    st.success("✅ Annotation saved!")
-                    st.session_state.annotation_data[selected_image] = annotation_data
+                    if os.path.exists(annotation_file):
+                        try:
+                            with open(annotation_file, 'r') as f:
+                                existing_annotation = json.load(f)
+                            st.info("📝 Previous annotation found - editing existing")
+                        except:
+                            pass
+                    
+                    # Annotation interface with existing values
+                    st.markdown("**Annotation Guidelines:**")
+                    st.markdown("- Heavily colonized: >70% root area")
+                    st.markdown("- Moderately colonized: 30-70%")
+                    st.markdown("- Lightly colonized: 10-30%")
+                    st.markdown("- Not colonized: <10%")
+                    
+                    # Pre-fill with existing values if available
+                    default_type = existing_annotation.get('annotation_type', "Not annotated") if existing_annotation else "Not annotated"
+                    default_percentage = existing_annotation.get('colonization_percentage', 0) if existing_annotation else 0
+                    default_features = existing_annotation.get('detected_features', []) if existing_annotation else []
+                    
+                    annotation_type = st.selectbox(
+                        "Annotation type for this image:",
+                        ["Not annotated", "Heavily colonized", "Moderately colonized", "Lightly colonized", "Not colonized"],
+                        index=["Not annotated", "Heavily colonized", "Moderately colonized", "Lightly colonized", "Not colonized"].index(default_type)
+                    )
+                    
+                    colonization_percentage = st.slider(
+                        "Estimated colonization percentage:",
+                        0, 100, default_percentage
+                    )
+                    
+                    detected_features = st.multiselect(
+                        "Manually detected features:",
+                        ["Arbuscules", "Vesicles", "Hyphae", "Spores", "Entry points"],
+                        default=default_features
+                    )
+                    
+                    notes = st.text_area(
+                        "Additional notes (optional):",
+                        value=existing_annotation.get('notes', '') if existing_annotation else ''
+                    )
+                    
+                    if st.button("💾 Save Annotation", type="primary"):
+                        annotation_data = {
+                            "image": selected_image,
+                            "annotation_type": annotation_type,
+                            "colonization_percentage": colonization_percentage,
+                            "detected_features": detected_features,
+                            "notes": notes,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        
+                        try:
+                            with open(annotation_file, 'w') as f:
+                                json.dump(annotation_data, f, indent=2)
+                            
+                            st.success("✅ Annotation saved successfully!")
+                            st.session_state.annotation_data[selected_image] = annotation_data
+                            
+                            # Auto-refresh to show updated annotation
+                            time.sleep(1)
+                            st.rerun()
+                            
+                        except Exception as e:
+                            st.error(f"❌ Error saving annotation: {str(e)}")
+                
+                except Exception as e:
+                    st.error(f"❌ Error loading image: {str(e)}")
         else:
             st.info("👆 Upload images first to start annotating")
-
+        
+        # Display existing annotations section
+        st.markdown("---")
+        st.subheader("📋 Saved Annotations")
+        
+        annotation_files = []
+        if os.path.exists("data/annotations"):
+            annotation_files = [f for f in os.listdir("data/annotations") if f.endswith('.json')]
+        
+        if annotation_files:
+            st.write(f"**Total annotations:** {len(annotation_files)}")
+            
+            # Load and display annotations
+            annotations = []
+            for ann_file in annotation_files:
+                try:
+                    with open(os.path.join("data/annotations", ann_file), 'r') as f:
+                        data = json.load(f)
+                        annotations.append(data)
+                except:
+                    continue
+            
+            if annotations:
+                # Summary statistics
+                df = pd.DataFrame(annotations)
+                if 'colonization_percentage' in df.columns:
+                    avg_colonization = df['colonization_percentage'].mean()
+                    st.metric("Average Colonization", f"{avg_colonization:.1f}%")
+                
+                # Show recent annotations
+                with st.expander(f"📝 View all {len(annotations)} annotations"):
+                    for annotation in sorted(annotations, key=lambda x: x.get('timestamp', ''), reverse=True):
+                        st.write(f"**{annotation['image']}** - {annotation['annotation_type']} ({annotation['colonization_percentage']}%)")
+                        if annotation.get('detected_features'):
+                            st.write(f"   Features: {', '.join(annotation['detected_features'])}")
+                        if annotation.get('notes'):
+                            st.write(f"   Notes: {annotation['notes']}")
+                        st.write("---")
+        else:
+            st.info("No annotations saved yet")
 def train_model_page():
     st.header("🤖 Train Deep Learning Model")
     
@@ -167,6 +290,23 @@ def train_model_page():
     
     with col1:
         st.subheader("Training Configuration")
+        
+        # Model naming section
+        st.markdown("**Model Identity**")
+        model_name = st.text_input(
+            "Model name:",
+            value=f"mycorrhizal_model_{datetime.now().strftime('%Y%m%d')}",
+            help="Give your model a descriptive name for future use"
+        )
+        
+        model_description = st.text_area(
+            "Model description (optional):",
+            placeholder="e.g., Trained on 50 root images from greenhouse experiment A",
+            height=100
+        )
+        
+        st.markdown("---")
+        st.markdown("**Training Parameters**")
         
         epochs = st.slider("Number of epochs:", 1, 100, 20)
         learning_rate = st.selectbox("Learning rate:", [0.001, 0.0001, 0.00001], index=1)
@@ -191,7 +331,24 @@ def train_model_page():
     with col2:
         st.subheader("Training Progress")
         
+        # Show existing models
+        existing_models = [f for f in os.listdir("models") if f.endswith('.pth')] if os.path.exists("models") else []
+        if existing_models:
+            st.markdown("**Existing Models:**")
+            for model_file in existing_models:
+                # Extract info from filename or metadata
+                st.write(f"📁 {model_file}")
+        
         if st.button("🚀 Start Training", type="primary"):
+            # Validate model name
+            if not model_name.strip():
+                st.error("❌ Please provide a model name")
+                return
+            
+            # Clean model name for filename
+            safe_model_name = "".join(c for c in model_name if c.isalnum() or c in (' ', '-', '_')).strip()
+            safe_model_name = safe_model_name.replace(' ', '_')
+            
             progress_bar = st.progress(0)
             status_text = st.empty()
             metrics_placeholder = st.empty()
@@ -225,19 +382,64 @@ def train_model_page():
                                         title="Training Progress")
                             metrics_placeholder.plotly_chart(fig, use_container_width=True)
                 
-                # Save model
-                model_path = f"models/mycorrhizal_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pth"
-                trainer.save_model(model_path)
+                # Save model with custom name and metadata
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                model_filename = f"{safe_model_name}_{timestamp}.pth"
+                model_path = os.path.join("models", model_filename)
                 
-                st.success(f"🎉 Model trained successfully! Saved to: {model_path}")
+                # Create model metadata
+                model_metadata = {
+                    'model_name': model_name,
+                    'description': model_description,
+                    'model_type': model_type,
+                    'training_date': datetime.now().isoformat(),
+                    'epochs': epochs,
+                    'learning_rate': learning_rate,
+                    'batch_size': batch_size,
+                    'num_annotations': len(annotation_files),
+                    'final_loss': trainer.train_losses[-1] if trainer.train_losses else None,
+                    'final_accuracy': trainer.train_accuracies[-1] if trainer.train_accuracies else None
+                }
+                
+                # Save model with metadata
+                torch.save({
+                    'model_state_dict': trainer.model.state_dict(),
+                    'model_type': model_type,
+                    'optimizer_state_dict': trainer.optimizer.state_dict(),
+                    'train_losses': trainer.train_losses,
+                    'val_losses': trainer.val_losses,
+                    'train_accuracies': trainer.train_accuracies,
+                    'val_accuracies': trainer.val_accuracies,
+                    'metadata': model_metadata  # Add metadata
+                }, model_path)
+                
+                # Save metadata separately for easy reading
+                metadata_path = os.path.join("models", f"{safe_model_name}_{timestamp}_metadata.json")
+                with open(metadata_path, 'w') as f:
+                    json.dump(model_metadata, f, indent=2)
+                
+                st.success(f"🎉 Model '{model_name}' trained successfully!")
+                st.success(f"📁 Saved as: {model_filename}")
                 st.session_state.model_trained = True
+                
+                # Display model info
+                st.subheader("📋 Model Information")
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.write(f"**Name:** {model_name}")
+                    st.write(f"**Architecture:** {model_type}")
+                    st.write(f"**Training Images:** {len(annotation_files)}")
+                with col_b:
+                    st.write(f"**Final Loss:** {trainer.train_losses[-1]:.4f}")
+                    st.write(f"**Final Accuracy:** {trainer.train_accuracies[-1]:.1f}%")
+                    st.write(f"**File:** {model_filename}")
                 
                 # Final metrics display
                 final_metrics = trainer.get_training_metrics()
                 if final_metrics:
                     metrics_df = pd.DataFrame(final_metrics)
                     fig = px.line(metrics_df, x='epoch', y=['train_loss', 'val_loss'], 
-                                title="Final Training Progress")
+                                title=f"Training Progress - {model_name}")
                     st.plotly_chart(fig, use_container_width=True)
                 
                 # Model evaluation
@@ -255,7 +457,7 @@ def train_model_page():
                                annot=True, fmt='d', cmap='Blues',
                                xticklabels=eval_results['class_names'],
                                yticklabels=eval_results['class_names'], ax=ax)
-                    ax.set_title('Confusion Matrix')
+                    ax.set_title(f'Confusion Matrix - {model_name}')
                     ax.set_ylabel('True Label')
                     ax.set_xlabel('Predicted Label')
                     st.pyplot(fig)
@@ -263,7 +465,6 @@ def train_model_page():
             except Exception as e:
                 st.error(f"❌ Training failed: {str(e)}")
                 st.info("💡 Try reducing batch size or using a simpler model")
-
 def batch_analysis_page():
     st.header("⚡ Batch AI Analysis")
     
@@ -279,23 +480,84 @@ def batch_analysis_page():
     
     with col1:
         st.subheader("AI Model Selection")
-        selected_model = st.selectbox("Choose trained model:", model_files)
         
-        # Model info
+        # Enhanced model selection with metadata
+        model_options = {}
+        for model_file in model_files:
+            try:
+                # Try to load metadata
+                metadata_file = model_file.replace('.pth', '_metadata.json')
+                metadata_path = os.path.join("models", metadata_file)
+                
+                if os.path.exists(metadata_path):
+                    with open(metadata_path, 'r') as f:
+                        metadata = json.load(f)
+                    display_name = f"{metadata.get('model_name', model_file)} ({metadata.get('training_date', '')[:10]})"
+                else:
+                    # Fallback to loading from model checkpoint
+                    model_path = os.path.join("models", model_file)
+                    try:
+                        checkpoint = torch.load(model_path, map_location='cpu')
+                        metadata = checkpoint.get('metadata', {})
+                        if metadata:
+                            display_name = f"{metadata.get('model_name', model_file)} ({metadata.get('training_date', '')[:10]})"
+                        else:
+                            display_name = model_file
+                    except:
+                        display_name = model_file
+                
+                model_options[display_name] = model_file
+            except:
+                model_options[model_file] = model_file
+        
+        selected_display_name = st.selectbox("Choose trained model:", list(model_options.keys()))
+        selected_model = model_options[selected_display_name]
+        
+        # Enhanced model info display
         if selected_model:
             model_path = os.path.join("models", selected_model)
             try:
-                checkpoint = torch.load(model_path, map_location='cpu')
-                model_info = {
-                    "Model Type": checkpoint.get('model_type', 'Unknown'),
-                    "Training Date": selected_model.split('_')[-1].replace('.pth', ''),
-                    "File Size": f"{os.path.getsize(model_path) / (1024*1024):.1f} MB"
-                }
+                # Try to load metadata first
+                metadata_file = selected_model.replace('.pth', '_metadata.json')
+                metadata_path = os.path.join("models", metadata_file)
+                
+                model_info = {}
+                if os.path.exists(metadata_path):
+                    with open(metadata_path, 'r') as f:
+                        metadata = json.load(f)
+                    model_info = {
+                        "Model Name": metadata.get('model_name', 'Unknown'),
+                        "Description": metadata.get('description', 'No description'),
+                        "Architecture": metadata.get('model_type', 'Unknown'),
+                        "Training Date": metadata.get('training_date', '')[:10],
+                        "Epochs": metadata.get('epochs', 'Unknown'),
+                        "Training Images": metadata.get('num_annotations', 'Unknown'),
+                        "Final Accuracy": f"{metadata.get('final_accuracy', 0):.1f}%" if metadata.get('final_accuracy') else 'Unknown'
+                    }
+                else:
+                    # Fallback to checkpoint data
+                    checkpoint = torch.load(model_path, map_location='cpu')
+                    metadata = checkpoint.get('metadata', {})
+                    model_info = {
+                        "Model Type": checkpoint.get('model_type', 'Unknown'),
+                        "File Size": f"{os.path.getsize(model_path) / (1024*1024):.1f} MB"
+                    }
+                    if metadata:
+                        model_info.update({
+                            "Model Name": metadata.get('model_name', 'Unknown'),
+                            "Training Date": metadata.get('training_date', '')[:10],
+                        })
+                
+                # Display model information
+                st.markdown("**Model Information:**")
                 for key, value in model_info.items():
-                    st.write(f"**{key}:** {value}")
-            except:
-                st.warning("Could not load model info")
+                    if value and value != 'Unknown':
+                        st.write(f"**{key}:** {value}")
+                        
+            except Exception as e:
+                st.warning(f"Could not load model info: {e}")
         
+        # Rest of the batch analysis code remains the same...
         st.subheader("Batch Upload")
         batch_files = st.file_uploader(
             "Upload images for AI analysis",
@@ -313,6 +575,7 @@ def batch_analysis_page():
             export_gradcam = st.checkbox("Generate Grad-CAM heatmaps", value=False)
             detailed_features = st.checkbox("Detailed feature analysis", value=True)
     
+    # Rest of the function continues as before...
     with col2:
         st.subheader("AI Analysis Results")
         
@@ -356,6 +619,7 @@ def batch_analysis_page():
                     
                     result = {
                         "filename": uploaded_file.name,
+                        "model_used": selected_display_name,
                         "ai_predicted_class": prediction["class_name"],
                         "ai_confidence": prediction["confidence"],
                         "colonization_percentage": quantification["colonization_percentage"],
@@ -381,9 +645,10 @@ def batch_analysis_page():
                 progress_bar.progress((i + 1) / len(batch_files))
             
             if results:
-                # Save results
+                # Save results with model info
                 results_df = pd.DataFrame(results)
-                results_file = f"data/results/ai_batch_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                results_file = f"data/results/ai_batch_analysis_{timestamp}.csv"
                 results_df.to_csv(results_file, index=False)
                 
                 # Display results
@@ -397,7 +662,7 @@ def batch_analysis_page():
                 metric_col1, metric_col2, metric_col3 = st.columns(3)
                 metric_col1.metric("Average Colonization", f"{avg_colonization:.1f}%")
                 metric_col2.metric("High Confidence", f"{high_confidence_count}/{total_count}")
-                metric_col3.metric("AI Accuracy", f"{(high_confidence_count/total_count)*100:.1f}%")
+                metric_col3.metric("Model Used", selected_display_name.split(' (')[0])
                 
                 # Results table
                 st.dataframe(results_df)
