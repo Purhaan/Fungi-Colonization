@@ -12,6 +12,7 @@ from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
 
+from src.active_learning import ActiveLearningSelector, calculate_annotation_priority_score
 from src.image_processor import ImageProcessor
 from src.model import MycorrhizalCNN
 from src.trainer import ModelTrainer
@@ -1102,6 +1103,204 @@ def explainability_page():
             st.markdown("- **Attention analysis**: Shows which parts of the image influenced the AI's decision")
             st.markdown("- **Class-specific**: See what the AI would focus on for different colonization levels")
 
+# ADD this new page function to app.py:
+def smart_annotation_page():
+    st.header("🧠 Smart Annotation Assistant")
+    st.markdown("### AI suggests which images to annotate next for maximum learning efficiency")
+    
+    # Check current status
+    all_images = []
+    if os.path.exists("data/raw"):
+        all_images = [f for f in os.listdir("data/raw") 
+                     if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.tif'))]
+    
+    annotated_images = []
+    if os.path.exists("data/annotations"):
+        annotation_files = [f for f in os.listdir("data/annotations") if f.endswith('.json')]
+        for ann_file in annotation_files:
+            try:
+                with open(os.path.join("data/annotations", ann_file), 'r') as f:
+                    data = json.load(f)
+                    if 'image' in data:
+                        annotated_images.append(data['image'])
+            except:
+                continue
+    
+    unlabeled_images = [img for img in all_images if img not in annotated_images]
+    
+    # Status display
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Images", len(all_images))
+    col2.metric("Annotated", len(annotated_images))
+    col3.metric("Remaining", len(unlabeled_images))
+    
+    if len(annotated_images) >= 3:
+        progress = len(annotated_images) / len(all_images) if all_images else 0
+        st.progress(progress)
+        st.write(f"📊 **Progress:** {progress:.1%} complete")
+    
+    if len(unlabeled_images) == 0:
+        st.success("🎉 All images annotated!")
+        return
+    
+    # Smart selection
+    st.subheader("🎯 Smart Image Selection")
+    
+    n_select = st.slider("Number of images to select:", 1, min(10, len(unlabeled_images)), 5)
+    
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        if st.button("🤖 Find Most Important Images", type="primary"):
+            with st.spinner("🔍 Analyzing images for optimal selection..."):
+                
+                # Initialize active learning
+                latest_model = None
+                if os.path.exists("models"):
+                    model_files = [f for f in os.listdir("models") if f.endswith('.pth')]
+                    if model_files:
+                        latest_model = os.path.join("models", model_files[-1])
+                
+                selector = ActiveLearningSelector(latest_model)
+                
+                # Get full paths
+                unlabeled_paths = [os.path.join("data/raw", img) for img in unlabeled_images]
+                annotated_paths = [os.path.join("data/raw", img) for img in annotated_images]
+                
+                # Select important images
+                selected_images = selector.select_next_images(
+                    unlabeled_paths, annotated_paths, n_select
+                )
+                
+                if selected_images:
+                    st.session_state.selected_for_annotation = selected_images
+                    st.success(f"🎯 Selected {len(selected_images)} high-priority images!")
+                else:
+                    st.error("❌ Could not analyze images")
+    
+    with col_b:
+        # Show selection strategy info
+        if len(annotated_images) < 10:
+            st.info("🔄 **Strategy:** Diversity Sampling")
+            st.write("Selecting diverse images to cover different visual patterns")
+        else:
+            st.info("🧠 **Strategy:** Uncertainty + Diversity")
+            st.write("AI focuses on images where it's most uncertain + diverse samples")
+    
+    # Display selected images for annotation
+    if 'selected_for_annotation' in st.session_state:
+        st.subheader("📝 Priority Images for Annotation")
+        
+        selected_images = st.session_state.selected_for_annotation
+        
+        for i, img_info in enumerate(selected_images):
+            st.markdown("---")
+            st.subheader(f"🎯 Priority {i+1}: {os.path.basename(img_info['image_path'])}")
+            
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                try:
+                    image = Image.open(img_info['image_path'])
+                    st.image(image, use_column_width=True)
+                    
+                    # Show AI insights
+                    if 'uncertainty' in img_info:
+                        st.metric("🎲 AI Uncertainty", f"{img_info['uncertainty']:.2f}")
+                    if 'confidence' in img_info:
+                        st.metric("🎯 AI Confidence", f"{img_info['confidence']:.1%}")
+                    if 'predicted_class' in img_info:
+                        st.info(f"🤖 **AI Guess:** {img_info['predicted_class']}")
+                    if 'reason' in img_info:
+                        st.info(f"📋 **Why Selected:** {img_info['reason']}")
+                        
+                except Exception as e:
+                    st.error(f"Error loading image: {e}")
+                    continue
+            
+            with col2:
+                st.markdown("**Quick Annotation:**")
+                
+                # Quick annotation interface
+                colonization = st.selectbox(
+                    "Colonization level:",
+                    ["Not colonized", "Lightly colonized", "Moderately colonized", "Heavily colonized"],
+                    key=f"quick_col_{i}"
+                )
+                
+                percentage = st.slider(
+                    "Percentage:", 0, 100, 25, key=f"quick_pct_{i}"
+                )
+                
+                features = st.multiselect(
+                    "Detected features:",
+                    ["Arbuscules", "Vesicles", "Hyphae", "Spores", "Entry points"],
+                    key=f"quick_feat_{i}"
+                )
+                
+                notes = st.text_area(
+                    "Notes (optional):", 
+                    placeholder="Any observations...",
+                    key=f"quick_notes_{i}",
+                    height=80
+                )
+                
+                if st.button(f"💾 Save Priority {i+1}", key=f"save_quick_{i}", type="primary"):
+                    # Save annotation
+                    img_name = os.path.basename(img_info['image_path'])
+                    annotation_file = os.path.join("data/annotations", f"{img_name}_annotation.json")
+                    
+                    annotation_data = {
+                        "image": img_name,
+                        "annotation_type": colonization,
+                        "colonization_percentage": percentage,
+                        "detected_features": features,
+                        "notes": notes,
+                        "timestamp": datetime.now().isoformat(),
+                        "annotation_method": "smart_selection",
+                        "ai_suggestion": img_info.get('predicted_class', None),
+                        "ai_confidence": img_info.get('confidence', None)
+                    }
+                    
+                    try:
+                        with open(annotation_file, 'w') as f:
+                            json.dump(annotation_data, f, indent=2)
+                        
+                        st.success(f"✅ Saved annotation for Priority {i+1}!")
+                        
+                        # Remove from session state
+                        st.session_state.selected_for_annotation.remove(img_info)
+                        
+                        # Update metrics
+                        time.sleep(1)
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error saving: {e}")
+    
+    # Efficiency estimator
+    st.sidebar.header("💡 Efficiency Calculator")
+    total_to_annotate = st.sidebar.number_input("Total images to process:", 10, 5000, 100)
+    manual_rate = st.sidebar.number_input("Your annotation rate (per hour):", 1, 50, 15)
+    
+    # Traditional vs Smart annotation time
+    traditional_time = total_to_annotate / manual_rate
+    smart_needed = int(total_to_annotate * 0.3)  # Active learning typically needs 30%
+    smart_time = smart_needed / manual_rate
+    
+    st.sidebar.metric("📚 Traditional Method", f"{traditional_time:.1f} hours")
+    st.sidebar.metric("🧠 Smart Method", f"{smart_time:.1f} hours")
+    st.sidebar.metric("⏰ Time Saved", f"{traditional_time - smart_time:.1f} hours")
+    st.sidebar.metric("📊 Efficiency Gain", f"{(traditional_time - smart_time)/traditional_time:.1%}")
+
+page = st.sidebar.selectbox(
+    "Choose a page:",
+    ["Upload & Annotate", "Smart Annotation", "Train AI Model", "Batch Analysis", "Results & Export", "Model Explainability"]
+)
+
+# And add the new page to the if/elif chain:
+elif page == "Smart Annotation":
+    smart_annotation_page()
 def generate_summary_report(df):
     """Generate a text summary report"""
     report = f"""
