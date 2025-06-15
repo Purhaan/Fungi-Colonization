@@ -1,110 +1,85 @@
+#!/usr/bin/env python3
+"""
+Main Streamlit app with color-coded segmentation training
+"""
+
 import streamlit as st
 import os
-import time
+import json
 import pandas as pd
 import numpy as np
-import torch
+from PIL import Image, ImageDraw
 import cv2
-from PIL import Image
-import json
-import zipfile
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
+import torch
 
-# Fixed imports with error handling
+# Import segmentation modules
 try:
-    from src.active_learning import ActiveLearningSelector, calculate_annotation_priority_score
-    from src.image_processor import ImageProcessor
-    from src.model import MycorrhizalCNN
-    from src.trainer import ModelTrainer
-    from src.inference import ModelInference
-    from src.quantification import ColonizationQuantifier
-    from src.gradcam import GradCAMVisualizer
-except ImportError as e:
-    st.error(f"❌ Import error: {e}")
-    st.info("💡 Some advanced features may not be available. Core functionality will still work.")
-    
-    # Create minimal fallback classes
-    class ImageProcessor:
-        def preprocess_image(self, path, augment=False):
-            from torchvision import transforms
-            transform = transforms.Compose([
-                transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            ])
-            image = Image.open(path).convert('RGB')
-            return transform(image)
-    
-    class MycorrhizalCNN:
-        def __init__(self, model_type="ResNet18", num_classes=5):
-            import torch.nn as nn
-            from torchvision import models
-            self.backbone = models.resnet18(pretrained=True)
-            self.backbone.fc = nn.Linear(self.backbone.fc.in_features, num_classes)
-        
-        def forward(self, x):
-            return self.backbone(x)
+    from src.segmentation.color_config import STRUCTURE_COLORS
+    from src.segmentation.trainer import SegmentationTrainer
+    from src.segmentation.models import UNet
+    SEGMENTATION_AVAILABLE = True
+except ImportError:
+    SEGMENTATION_AVAILABLE = False
+    st.error("Segmentation modules not found. Please check your installation.")
 
 # Page config
 st.set_page_config(
-    page_title="Mycorrhizal Colonization Detector",
-    page_icon="🔬",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="Mycorrhizal Segmentation System",
+    page_icon="🎨",
+    layout="wide"
 )
 
-# Create directories
-os.makedirs("data/raw", exist_ok=True)
-os.makedirs("data/annotations", exist_ok=True)
-os.makedirs("data/processed", exist_ok=True)
-os.makedirs("data/results", exist_ok=True)
-os.makedirs("models", exist_ok=True)
-
 def main():
-    st.title("🔬 Mycorrhizal Colonization Detection System")
-    st.markdown("### AI-powered analysis of plant root microscope images")
+    st.title("🎨 Mycorrhizal Structure Segmentation System")
+    st.markdown("### AI-powered detection of specific fungal structures with color-coded training")
     
-    # Show system status
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.success("✅ Core System Ready")
-    with col2:
-        try:
-            import torch
-            st.success("✅ PyTorch Available")
-        except ImportError:
-            st.error("❌ PyTorch Missing")
-    with col3:
-        device = "GPU" if torch.cuda.is_available() else "CPU"
-        st.info(f"🖥️ Running on {device}")
+    if not SEGMENTATION_AVAILABLE:
+        st.error("❌ Segmentation system not available. Please install required modules.")
+        return
     
-    # Initialize session state
-    if 'annotation_data' not in st.session_state:
-        st.session_state.annotation_data = {}
-    if 'current_image' not in st.session_state:
-        st.session_state.current_image = None
-    if 'model_trained' not in st.session_state:
-        st.session_state.model_trained = False
+    # Show color legend
+    show_color_legend()
     
-    # Sidebar navigation
-    st.sidebar.title("Navigation")
-    page = st.sidebar.selectbox(
-        "Choose a page:",
-        ["Upload & Annotate", "Train AI Model", "Batch Analysis", "Results & Export", "Model Explainability"]
-    )
+    # Main navigation
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📤 Upload Color-Coded Data", 
+        "🔍 Validate Annotations",
+        "🧠 Train Segmentation Model", 
+        "⚡ Analyze Images",
+        "📊 Results & Export"
+    ])
     
-    if page == "Upload & Annotate":
-        upload_and_annotate_page()
-    elif page == "Train AI Model":
-        train_model_page()
-    elif page == "Batch Analysis":
-        batch_analysis_page()
-    elif page == "Results & Export":
-        results_export_page()
-    elif page == "Model Explainability":
-        explainability_page()
+    with tab1:
+        upload_color_coded_data()
+    
+    with tab2:
+        validate_annotations()
+    
+    with tab3:
+        train_segmentation_model()
+    
+    with tab4:
+        analyze_images()
+    
+    with tab5:
+        results_export()
+
+def show_color_legend():
+    """Display color coding legend"""
+    with st.expander("🎨 Color Coding Reference", expanded=True):
+        cols = st.columns(len(STRUCTURE_COLORS))
+        for i, (structure, info) in enumerate(STRUCTURE_COLORS.items()):
+            with cols[i]:
+                st.markdown(f"""
+                <div style='background-color: {info['color']}; padding: 8px; border-radius: 4px; text-align: center; color: white; text-shadow: 1px 1px 1px black; margin: 2px;'>
+                    <strong>{structure.replace('_', ' ').title()}</strong><br>
+                    <small>RGB: {info['rgb']}</small>
+                </div>
+                """, unsafe_allow_html=True)
+
 
 def upload_and_annotate_page():
     st.header("📤 Upload Images & Manual Annotation")
