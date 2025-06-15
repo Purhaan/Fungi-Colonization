@@ -67,3 +67,34 @@ class MycorrhizalCNN(nn.Module):
     def get_feature_maps(self) -> torch.Tensor:
         """Get feature maps for Grad-CAM."""
         return self.feature_maps
+
+# Add to the end of src/model.py
+
+class HybridMycorrhizalModel(nn.Module):
+    """Model that supports both classification and segmentation"""
+    
+    def __init__(self, model_type: str = "ResNet18", num_classes: int = 5, 
+                 mode: str = "classification"):
+        super(HybridMycorrhizalModel, self).__init__()
+        
+        self.mode = mode
+        self.model_type = model_type
+        self.num_classes = num_classes
+        
+        if mode == "classification":
+            # Original classification model
+            if model_type == "ResNet18":
+                self.backbone = models.resnet18(pretrained=True)
+                self.backbone.fc = nn.Sequential(
+                    nn.Linear(self.backbone.fc.in_features, 256),
+                    nn.ReLU(),
+                    nn.Dropout(0.5),
+                    nn.Linear(256, num_classes)
+                )
+        elif mode == "segmentation":
+            # Import segmentation model
+            from .segmentation.models import UNet
+            self.backbone = UNet(num_classes=num_classes)
+    
+    def forward(self, x):
+        return self.backbone(x)
